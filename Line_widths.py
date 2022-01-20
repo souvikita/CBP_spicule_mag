@@ -24,6 +24,7 @@ def lp_hbeta_core_width(sp,ll):
     sp : spectrum
     ll : wavelength positions relative to line center, in AA
     returns corewidth : width in AA (units ll)
+    returns midpoint :  mid point of the opposite ends of the lc width in AA (units ll)
     """
     from scipy.interpolate import interp1d
     if np.min(ll) > -0.66 or np.max(ll) < 0.66:
@@ -37,6 +38,7 @@ def lp_hbeta_core_width(sp,ll):
     maxp = np.argmax(sp)
     minp = np.argmin(sp)
     corewidth =0.
+    midpoint = 0.
     if minp > 1 and minp < nl-2:
         m0 = np.min(np.abs(ll+0.66))
         m1 = np.min(np.abs(ll-0.66))
@@ -63,11 +65,14 @@ def lp_hbeta_core_width(sp,ll):
         f4 = interp1d(x4,y4,fill_value="extrapolate")
         ll1 = f4((avgw-spmin)/2.+spmin)
         corewidth=ll1-ll0
+        midpoint =(ll1+ll0)/2. #--Added to compute the midpoint of the two wavelength positions
         if np.isfinite(corewidth)==0:
             corewidth =0
+            midpoint = np.nan
         if corewidth > lrange:
             corewidth = lrange
-    return corewidth
+            midpoint = (np.max(ll)+np.min(ll))/2
+    return corewidth, midpoint
 
 
 dpath_SST = '/mn/stornext/d18/lapalma/reduc/2021/2021-08-04/CHROMIS/cubes_nb/'
@@ -116,27 +121,37 @@ def compute_linewidth_pixel(time_index):
     -------
     width_2D: 2D array
         Line core width map for the chosen time stamp
+    mid_point: 2D array
+        Mid point of the opposite ends of the corewidth. A measure of Dopplershift of the line
     """
     ll = (wav - wav[13])*1e1
     size = np.shape(cubeH[:,:,time_index,:]) #(Nx,Ny,Nw)
     #mod_cubeH = cubeH[50:100,50:100,time_index,:]
     width_2D = np.zeros((size[0],size[1]))
+    mid_point = width_2D*0
     for row in range(size[0]):
         for col in range(size[1]):
             if np.all(cubeH[row,col,time_index,:]==279) == False:
-                width_2D[row,col] = lp_hbeta_core_width(cubeH[row,col,time_index,:],ll)
+                width_2D[row,col],mid_point[row,col] = lp_hbeta_core_width(cubeH[row,col,time_index,:],ll)
             else:
-                width_2D[row,col] = np.nan
-    return width_2D
+                width_2D[row,col],mid_point[row,col] = (np.nan, np.nan)
+    return width_2D, mid_point
 
 print('*****Going Parallel******')
 print("Declaring number of processes")
-pool=mp.Pool(80)
-print("Mapping the function into 80 processes")
-res1 = pool.map(compute_linewidth_pixel,range(0,95))
-lc_widths = np.swapaxes(np.array(res1),0,2)
+pool=mp.Pool(100)
+print("Mapping the function into 100 processes")
+res1 = pool.map(compute_linewidth_pixel,range(0,96)) # return is in the form (nt,2,nx,ny)
+lc_widths = np.swapaxes(np.float32(np.array(res1))[:,0,:,:],0,2) # storing the lc_widths (nt,0,nx,ny). The conversion to float32 is needed for making la palma cubes.
+lc_shifts = np.swapaxes(np.float32(np.array(res1))[:,1,:,:],0,2) # storing the mid_points (nt,1,nx,ny)
 pool.close()
 pool.join()
+hf = h5py.File(dpath_SST+'H_beta_widths_shifts_04.08.2021_CHROMIS.hdf5', 'w')
+hf.create_dataset('Width', data = lc_widths)
+hf.create_dataset('Shift', data = lc_shifts )
+hf.close()
+lp.writeto(dpath_SST+'lc_shifts_nb_4846_2021-08-04T09:56:50_scans=0-95.fcube', lc_shifts, extraheader='', dtype=None, verbose=False,
+            append=False)
 # hf = h5py.File('H_beta_widths_04.08.2021_CHROMIS.hdf5', 'w')
 # hf.create_dataset('Width', data = lc_widths)
 # hf.close()
